@@ -1,18 +1,17 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Ticketera — Preventa OCTUBRE 2025</title>
   <style>
     :root{
-      --bg:#eef3f7; --ink:#0e1726;
+      --bg:#eef3f7; --ink:#0e1726; --border:rgba(0,0,0,.08);
       --green-bg:#dff6e1; --green-fg:#1e8f3a;
       --purple-bg:#e9d5ff; --purple-fg:#6b21a8;
       --red-bg:#ffd7d7; --red-fg:#a80000;
       --card:#fff; --muted:#667085; --chip:#fff;
       --primary:#7c3aed; --primary-hov:#6d28d9;
-      --border:rgba(0,0,0,.08);
       --seat:32px; --gap:8px; --c-seat:28px; --c-gap:6px;
       --fila-label:40px; --card-pad:12px; --central-max-cols:21;
     }
@@ -21,7 +20,7 @@
     header{display:flex;align-items:center;justify-content:center;padding:16px 12px}
     h1{font-size:20px;margin:0}
     .wrap{width:min(1900px,96%);margin:0 auto 110px}
-    .escenario{background:#262626;color:#fff;padding:14px;margin:18px auto 14px;width:min(1200px,90%);border-radius:12px;text-align:center;font-weight:600;letter-spacing:.3px}
+    .escenario{background:#262626;color:#fff;padding:14px;margin:18px auto 14px;width:min(1200px,90%);border-radius:12px;text-align:center;font-weight:600}
     .legend{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);margin:8px 0 10px;flex-wrap:wrap}
     .pill{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);padding:6px 10px;border-radius:999px}
     .demo-dot{width:14px;height:14px;border-radius:50%;display:inline-block;border:1px solid var(--border)}
@@ -40,9 +39,6 @@
     }
     .sector[data-sec='C'] .seats{justify-content:center;gap:var(--c-gap)}
     .sector[data-sec='C'] .seat{width:var(--c-seat);height:var(--c-seat);font-size:11px}
-    .sector[data-sec='C'] .seats{overflow-x:auto;scrollbar-width:thin}
-    .sector[data-sec='C'] .seats::-webkit-scrollbar{height:6px}
-    .sector[data-sec='C'] .seats::-webkit-scrollbar-thumb{background:#cfd8e3;border-radius:999px}
     .sector[data-sec='I'] .seats{justify-content:flex-end}
     .seat{width:var(--seat);height:var(--seat);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;border:1px solid var(--border);transition:transform .06s ease;user-select:none}
     .seat:hover{transform:translateY(-1px)}
@@ -55,8 +51,6 @@
     .pricing .row{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
     .chip{background:#fff;border:1px solid var(--border);border-radius:999px;padding:8px 12px;font-size:13px}
     .min-note{text-align:center;font-weight:600;margin-top:10px;color:var(--primary)}
-    @media (min-width:980px){.pricing{grid-column:2/3}}
-    @media (max-width:979px){.seats{flex-wrap:wrap}.sector[data-sec='C']{width:100%}}
     #total{position:fixed;top:14px;right:16px;background:var(--chip);border:1px solid var(--border);padding:10px 14px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.12);font-weight:700;z-index:20}
     #comprar{position:fixed;bottom:18px;right:18px;padding:12px 18px;border:none;border-radius:12px;background:var(--primary);color:#fff;font-size:15px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.18);z-index:20}
     #comprar:hover{background:var(--primary-hov)}
@@ -70,138 +64,148 @@
   <div id="total">Total: $0</div>
   <div class="wrap">
     <div class="escenario">ESCENARIO 🎭</div>
-
     <div class="legend">
       <span class="pill"><span class="demo-dot dot-free"></span> Libre</span>
       <span class="pill"><span class="demo-dot dot-sel"></span> Hold (tu selección)</span>
-      <span class="pill"><span class="demo-dot dot-occ"></span> Ocupado (no seleccionable)</span>
+      <span class="pill"><span class="demo-dot dot-occ"></span> Ocupado</span>
     </div>
-
     <div class="grid-sectores" id="sectores"></div>
   </div>
   <button id="comprar" disabled title="Seleccioná al menos 5 butacas">Comprar</button>
 
   <script>
-    // --- Session ID persistente
-    const sid = (()=>{
-      const k='sessionId';
-      let v = localStorage.getItem(k);
-      if (!v) {
-        v = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())+Math.random());
-        localStorage.setItem(k, v);
+    // --- sessionId robusto con fallback
+    const sid = (() => {
+      try {
+        const k='sessionId';
+        let v = localStorage.getItem(k);
+        if (!v) {
+          v = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(36).slice(2));
+          localStorage.setItem(k, v);
+        }
+        return v;
+      } catch {
+        return Date.now() + '-' + Math.random().toString(36).slice(2);
       }
-      return v;
     })();
 
     const order = ['I','C','D'];
     const labels = { I: 'Izquierda', C: 'Central', D: 'Derecho' };
-    let currentData = [];
-    let isRefreshing = false;
+    let current = [];
+    let building = false;
 
-    async function getStatus() {
-      const r = await fetch('/.netlify/functions/status');
-      if (!r.ok) throw new Error('status '+r.status);
+    const priceFmt = n => '$' + (Number(n)||0).toLocaleString('es-AR');
+
+    async function fetchStatus(){
+      const r = await fetch('/.netlify/functions/status', { cache:'no-store' });
+      if(!r.ok) throw new Error('status '+r.status);
       return r.json();
     }
-
-    async function hold(sector, fila, asiento) {
-      const r = await fetch('/.netlify/functions/hold', {
-        method:'POST', headers:{'content-type':'application/json'},
-        body: JSON.stringify({ sector, fila, asiento, sessionId: sid })
+    async function apiHold(sec,fila,asiento){
+      const r = await fetch('/.netlify/functions/hold',{
+        method:'POST',headers:{'content-type':'application/json'},
+        body: JSON.stringify({ sector:sec, fila, asiento, sessionId: sid })
+      });
+      return r.json();
+    }
+    async function apiRelease(sec,fila,asiento){
+      const r = await fetch('/.netlify/functions/release',{
+        method:'POST',headers:{'content-type':'application/json'},
+        body: JSON.stringify({ sector:sec, fila, asiento, sessionId: sid })
       });
       return r.json();
     }
 
-    async function release(sector, fila, asiento) {
-      const r = await fetch('/.netlify/functions/release', {
-        method:'POST', headers:{'content-type':'application/json'},
-        body: JSON.stringify({ sector, fila, asiento, sessionId: sid })
-      });
-      return r.json();
+    function updateTotals(){
+      const mine = current.filter(s => s.Estado==='Hold' && (s.HoldBy||'')===sid);
+      const total = mine.reduce((a,s)=> a + (Number(s.Precio)||0), 0);
+      document.getElementById('total').textContent = 'Total: ' + priceFmt(total);
+      document.getElementById('countHint').textContent = `${mine.length}/5 seleccionadas`;
+      const buyBtn = document.getElementById('comprar');
+      buyBtn.disabled = mine.length < 5;
+      buyBtn.title = buyBtn.disabled ? 'Seleccioná al menos 5 butacas' : 'Continuar con la compra';
     }
 
-    function priceFmt(n){ return '$' + (Number(n)||0).toLocaleString('es-AR'); }
-
-    function build() {
-      const cont = document.getElementById('sectores');
-      cont.innerHTML = '';
-
+    function buildOnce(){
+      const root = document.getElementById('sectores');
+      root.innerHTML = '';
       // agrupar por sector/fila
-      const sectores = {};
-      currentData.forEach(b=>{
-        if(!sectores[b.Sector]) sectores[b.Sector] = {};
-        if(!sectores[b.Sector][b.Fila]) sectores[b.Sector][b.Fila] = [];
-        sectores[b.Sector][b.Fila].push(b);
+      const map = {};
+      current.forEach(s=>{
+        if(!map[s.Sector]) map[s.Sector]={};
+        if(!map[s.Sector][s.Fila]) map[s.Sector][s.Fila]=[];
+        map[s.Sector][s.Fila].push(s);
       });
 
       order.forEach(sec=>{
         const card = document.createElement('div');
         card.className = 'sector';
         card.dataset.sec = sec;
-        card.innerHTML = '<h2>Sector '+labels[sec]+'</h2><div class="rows" id="rows-'+sec+'"></div>';
-        cont.appendChild(card);
-
-        const rows = sectores[sec] || {};
-        const filas = Object.keys(rows).map(n=>parseInt(n)).sort((a,b)=>a-b);
+        card.innerHTML = `<h2>Sector ${labels[sec]}</h2><div class="rows" id="rows-${sec}"></div>`;
         const rowsDiv = card.querySelector('.rows');
+        const filas = Object.keys(map[sec]||{}).map(n=>parseInt(n)).sort((a,b)=>a-b);
 
         filas.forEach(f=>{
           const filaDiv = document.createElement('div');
           filaDiv.className = 'fila';
-          filaDiv.innerHTML = '<div class="fila-number">F'+f+'</div><div class="seats"></div>';
+          filaDiv.innerHTML = `<div class="fila-number">F${f}</div><div class="seats"></div>`;
           const seatsDiv = filaDiv.querySelector('.seats');
 
-          let lista = rows[f].slice().sort((a,b)=>a.Asiento-b.Asiento);
-          if (sec==='I') lista = lista.reverse();
+          let lista = (map[sec][f]||[]).slice().sort((a,b)=>a.Asiento-b.Asiento);
+          if(sec==='I') lista = lista.reverse();
 
           lista.forEach(s=>{
             const btn = document.createElement('button');
-            const isMineHold = (s.Estado==='Hold' && (s.HoldBy||'')===sid);
-            btn.className = 'seat ' + (
-              s.Estado === 'Ocupado' ? 'ocupado' :
-              isMineHold ? 'seleccionado' :
-              s.Estado === 'Hold' ? 'seleccionado' : // de otro: se verá igual pero no clickable
-              'libre'
-            );
+            btn.className = 'seat';
             btn.textContent = s.Asiento;
             btn.title = `Sector ${labels[s.Sector]} — Fila ${s.Fila} — Asiento ${s.Asiento} — ${priceFmt(s.Precio)}`;
-            btn.dataset.sector = labels[s.Sector];
             btn.dataset.sectorShort = s.Sector;
             btn.dataset.fila = s.Fila;
             btn.dataset.asiento = s.Asiento;
-            btn.dataset.precio = s.Precio;
 
-            const clickable = (s.Estado==='Libre') || (isMineHold);
-            if (s.Estado==='Ocupado' || (s.Estado==='Hold' && !isMineHold)) btn.disabled = true;
-
-            btn.onclick = async ()=>{
-              if (!clickable) return;
+            const isMine = (s.Estado==='Hold' && (s.HoldBy||'')===sid);
+            if (s.Estado==='Ocupado') {
+              btn.classList.add('ocupado');
               btn.disabled = true;
+            } else if (s.Estado==='Hold') {
+              btn.classList.add(isMine ? 'seleccionado' : 'seleccionado');
+              // si no es mío, deshabilitar
+              if (!isMine) btn.disabled = true;
+            } else {
+              btn.classList.add('libre');
+            }
+
+            btn.onclick = async () => {
+              if (btn.disabled) return;
+              const secKey = btn.dataset.sectorShort;
+              const fila = Number(btn.dataset.fila);
+              const asiento = Number(btn.dataset.asiento);
               try{
-                if (btn.classList.contains('libre')){
-                  const j = await hold(s.Sector, s.Fila, s.Asiento);
-                  if (!j.ok){ await refresh(true); return; }
-                } else if (btn.classList.contains('seleccionado')){
-                  // sólo liberar si es tuyo
-                  if (isMineHold){
-                    const j = await release(s.Sector, s.Fila, s.Asiento);
-                    if (!j.ok){ await refresh(true); return; }
+                if (btn.classList.contains('libre')) {
+                  const j = await apiHold(secKey, fila, asiento);
+                  if (!j.ok) console.warn('hold fail', j);
+                } else if (btn.classList.contains('seleccionado')) {
+                  // solo libero si es mío (según datos actuales)
+                  const nowObj = current.find(x=>x.Sector===secKey && x.Fila===fila && x.Asiento===asiento);
+                  if (nowObj && nowObj.HoldBy===sid) {
+                    const j = await apiRelease(secKey, fila, asiento);
+                    if (!j.ok) console.warn('release fail', j);
                   }
                 }
-                await refresh(true);
-              }catch(e){
-                console.error(e);
-                await refresh(true);
-              }
+              } catch(e){ console.error(e); }
+              finally { await refresh(true); }
             };
+
             seatsDiv.appendChild(btn);
           });
 
           rowsDiv.appendChild(filaDiv);
         });
+
+        root.appendChild(card);
       });
 
-      // panel de precios (estático, referencia)
+      // panel precios
       const pricing = document.createElement('div');
       pricing.className = 'pricing card';
       pricing.innerHTML = `
@@ -213,59 +217,58 @@
         </div>
         <div class="min-note">Mínimo de compra: <strong>5</strong> butacas</div>
       `;
-      cont.appendChild(pricing);
+      root.appendChild(pricing);
 
-      updateTotal();
-    }
-
-    function updateTotal(){
-      let sum = 0, n = 0;
-      currentData.forEach(s=>{
-        if (s.Estado==='Hold' && (s.HoldBy||'')===sid){
-          sum += Number(s.Precio)||0; n += 1;
-        }
-      });
-      document.getElementById('total').textContent = 'Total: ' + priceFmt(sum);
-      document.getElementById('countHint').textContent = n + '/5 seleccionadas';
-      const buyBtn = document.getElementById('comprar');
-      if (n >= 5){ buyBtn.disabled = false; buyBtn.title = 'Continuar con la compra'; }
-      else { buyBtn.disabled = true; buyBtn.title = 'Seleccioná al menos 5 butacas'; }
+      updateTotals();
     }
 
     async function refresh(rebuild=false){
-      if (isRefreshing) return;
-      isRefreshing = true;
+      if (building) return;
+      building = true;
       try{
-        const data = await getStatus();
-        currentData = data;
-        if (rebuild) build(); else { updateTotal(); }
-      }catch(e){
-        console.error(e);
-      }finally{
-        isRefreshing = false;
+        const data = await fetchStatus();
+        if (!Array.isArray(data)) throw new Error('status no es array');
+        current = data.map(x => ({
+          Sector: x.Sector,
+          Fila: Number(x.Fila),
+          Asiento: Number(x.Asiento),
+          Precio: Number(x.Precio||0),
+          Estado: (x.Estado||'Libre').trim(),
+          HoldBy: x.HoldBy || '',
+          HoldUntil: x.HoldUntil || ''
+        }));
+        if (rebuild) buildOnce(); else updateTotals();
+      } catch(e){
+        console.error('Error actualizando estado:', e);
+        if (!document.getElementById('neterr')) {
+          const d=document.createElement('div');
+          d.id='neterr';
+          d.style.cssText='position:fixed;left:12px;bottom:12px;background:#fff3cd;border:1px solid #ffe69c;padding:10px 12px;border-radius:10px;z-index:30;color:#8a6d3b';
+          d.textContent='No pude cargar el estado. Verificá las credenciales y la hoja compartida.';
+          document.body.appendChild(d);
+        }
+      } finally {
+        building = false;
       }
     }
 
-    document.getElementById('comprar').onclick = ()=>{
-      const mine = currentData.filter(s => s.Estado==='Hold' && (s.HoldBy||'')===sid);
-      if (mine.length < 5){
-        alert('El mínimo de compra es de 5 butacas. Actualmente seleccionaste '+mine.length+'.');
-        return;
-      }
+    document.getElementById('comprar').onclick = () => {
+      const mine = current.filter(s => s.Estado==='Hold' && (s.HoldBy||'')===sid);
+      if (mine.length < 5) { alert(`El mínimo de compra es de 5 butacas. Actualmente seleccionaste ${mine.length}.`); return; }
       const total = mine.reduce((a,s)=> a + (Number(s.Precio)||0), 0);
       const detalle = mine.map(s => `• Sector ${labels[s.Sector]} (F${s.Fila}, A${s.Asiento}) — $${Number(s.Precio).toLocaleString('es-AR')}`).join('\n');
       alert(
         '🛒 Resumen de compra\n\n' + detalle +
         '\n\nTotal: $' + total.toLocaleString('es-AR') +
-        '\n\nDatos para Transferencia:\nJAZMIN MAMARIAN\nCVU: 0000069701259241616580\nBanco: Proveedor de Servicios de Pago - Garpa S.A.' +
-        '\n\nIMPORTANTE: Tenés 10 minutos para completar la transferencia y enviar el comprobante. De lo contrario, los asientos se liberan automáticamente.'
+        '\n\nTransferencia:\nJAZMIN MAMARIAN\nCVU: 0000069701259241616580\nBanco: Proveedor de Servicios de Pago - Garpa S.A.' +
+        '\n\nIMPORTANTE: Tenés 10 minutos para completar la transferencia.'
       );
     };
 
-    // primer render
+    // init: primer render + polling
     (async ()=>{
-      await refresh(true);
-      setInterval(()=>refresh(true), 45000);
+      await refresh(true);           // construye DOM una vez con datos reales
+      setInterval(()=>refresh(true), 45000); // polling con rebuild (mantiene handlers frescos)
       document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) refresh(true); });
     })();
   </script>

@@ -10,6 +10,7 @@
       --green-bg:#dff6e1; --green-fg:#1e8f3a;
       --purple-bg:#e9d5ff; --purple-fg:#6b21a8;
       --red-bg:#ffd7d7; --red-fg:#a80000;
+      --yellow-bg:#fff6cc; --yellow-fg:#8a6d00;
       --card:#fff; --muted:#667085; --chip:#fff;
       --primary:#7c3aed; --primary-hov:#6d28d9;
       --seat:32px; --gap:8px; --c-seat:28px; --c-gap:6px;
@@ -24,7 +25,7 @@
     .legend{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted);margin:8px 0 10px;flex-wrap:wrap}
     .pill{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--border);padding:6px 10px;border-radius:999px}
     .demo-dot{width:14px;height:14px;border-radius:50%;display:inline-block;border:1px solid var(--border)}
-    .dot-free{background:var(--green-bg)} .dot-sel{background:var(--purple-bg)} .dot-occ{background:var(--red-bg)}
+    .dot-free{background:var(--green-bg)} .dot-sel{background:var(--purple-bg)} .dot-occ{background:var(--red-bg)} .dot-pend{background:var(--yellow-bg)}
     .grid-sectores{display:grid;gap:14px;grid-template-columns:1fr}
     @media (min-width:980px){.grid-sectores{grid-template-columns:340px 1fr 340px;align-items:start}}
     .sector,.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:var(--card-pad);box-shadow:0 1px 6px rgba(0,0,0,.06)}
@@ -44,8 +45,9 @@
     .seat:hover{transform:translateY(-1px)}
     .libre{background:var(--green-bg);color:var(--green-fg)}
     .seleccionado{background:var(--purple-bg);color:var(--purple-fg)}
+    .pendiente{background:var(--yellow-bg);color:var(--yellow-fg);cursor:not-allowed}
     .ocupado{background:var(--red-bg);color:var(--red-fg);cursor:not-allowed}
-    .ocupado:hover{transform:none}
+    .ocupado:hover,.pendiente:hover{transform:none}
     .pricing{margin-top:6px}
     .pricing h3{margin:0 0 8px 0;font-size:16px;text-align:center;color:var(--ink)}
     .pricing .row{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
@@ -57,7 +59,7 @@
     #comprar[disabled]{opacity:.5;cursor:not-allowed;box-shadow:none}
     #countHint{position:fixed;top:14px;right:160px;background:var(--chip);border:1px solid var(--border);padding:10px 14px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.12);font-weight:600;z-index:20;color:var(--muted)}
 
-    /* --- Modal simple --- */
+    /* Modal */
     .modal-backdrop{position:fixed;inset:0;background:rgba(14,23,38,.55);backdrop-filter:blur(2px);display:none;align-items:center;justify-content:center;z-index:200}
     .modal{width:min(720px,92vw);max-height:90vh;background:#fff;border:1px solid var(--border);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;overflow:hidden}
     .modal header{padding:16px 20px;border-bottom:1px solid var(--border);font-weight:700}
@@ -81,14 +83,15 @@
     <div class="escenario">ESCENARIO 🎭</div>
     <div class="legend">
       <span class="pill"><span class="demo-dot dot-free"></span> Libre</span>
-      <span class="pill"><span class="demo-dot dot-sel"></span> Hold (tu selección)</span>
+      <span class="pill"><span class="demo-dot dot-sel"></span> Tu selección</span>
+      <span class="pill"><span class="demo-dot dot-pend"></span> Pendiente de confirmación</span>
       <span class="pill"><span class="demo-dot dot-occ"></span> Ocupado</span>
     </div>
     <div class="grid-sectores" id="sectores"></div>
   </div>
   <button id="comprar" disabled title="Seleccioná al menos 5 butacas">Comprar</button>
 
-  <!-- Modal reutilizable -->
+  <!-- Modal -->
   <div id="modalRoot" class="modal-backdrop" aria-hidden="true">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <header id="modalTitle">Título</header>
@@ -98,45 +101,31 @@
   </div>
 
   <script>
-    // --- sessionId robusto con fallback
+    // ---- sessionId ----
     const sid = (() => {
       try {
         const k='sessionId';
         let v = localStorage.getItem(k);
-        if (!v) {
-          v = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(36).slice(2));
-          localStorage.setItem(k, v);
-        }
+        if (!v) { v = (crypto?.randomUUID?.() || (Date.now()+'-'+Math.random().toString(36).slice(2))); localStorage.setItem(k, v); }
         return v;
-      } catch {
-        return Date.now() + '-' + Math.random().toString(36).slice(2);
-      }
+      } catch { return Date.now()+'-'+Math.random().toString(36).slice(2); }
     })();
 
     const order = ['I','C','D'];
     const labels = { I: 'Izquierda', C: 'Central', D: 'Derecho' };
     let current = [];
-
     const priceFmt = n => '$' + (Number(n)||0).toLocaleString('es-AR');
 
-    async function fetchStatus(){
-      const r = await fetch('/.netlify/functions/status', { cache:'no-store' });
-      if(!r.ok) throw new Error('status '+r.status);
-      return r.json();
-    }
+    // ---- API ----
+    async function fetchStatus(){ const r=await fetch('/.netlify/functions/status',{cache:'no-store'}); if(!r.ok) throw new Error('status '+r.status); return r.json(); }
     async function apiHold(sec,fila,asiento){
-      const r = await fetch('/.netlify/functions/hold',{
-        method:'POST',headers:{'content-type':'application/json'},
-        body: JSON.stringify({ sector:sec, fila, asiento, sessionId: sid })
-      });
-      return r.json();
+      const r=await fetch('/.netlify/functions/hold',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sector:sec,fila,asiento,sessionId:sid})}); return r.json();
     }
     async function apiRelease(sec,fila,asiento){
-      const r = await fetch('/.netlify/functions/release',{
-        method:'POST',headers:{'content-type':'application/json'},
-        body: JSON.stringify({ sector:sec, fila, asiento, sessionId: sid })
-      });
-      return r.json();
+      const r=await fetch('/.netlify/functions/release',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sector:sec,fila,asiento,sessionId:sid})}); return r.json();
+    }
+    async function apiCheckout(alumno){
+      const r=await fetch('/.netlify/functions/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:sid,alumno})}); return r.json();
     }
 
     function updateTotals(){
@@ -152,7 +141,6 @@
     function buildOnce(){
       const root = document.getElementById('sectores');
       root.innerHTML = '';
-      // agrupar por sector/fila
       const map = {};
       current.forEach(s=>{
         if(!map[s.Sector]) map[s.Sector]={};
@@ -175,24 +163,26 @@
           const seatsDiv = filaDiv.querySelector('.seats');
 
           let lista = (map[sec][f]||[]).slice().sort((a,b)=>a.Asiento-b.Asiento);
-          if(sec==='I') lista = lista.reverse(); // espejado
+          if(sec==='I') lista = lista.reverse();
 
           lista.forEach(s=>{
             const btn = document.createElement('button');
             btn.className = 'seat';
             btn.textContent = s.Asiento;
-            btn.title = `Sector ${labels[s.Sector]} — Fila ${s.Fila} — Asiento ${s.Asiento} — ${priceFmt(s.Precio)}`;
+            btn.title = `Sector ${labels[s.Sector]} — F${s.Fila} — A${s.Asiento} — ${priceFmt(s.Precio)}`;
             btn.dataset.sectorShort = s.Sector;
             btn.dataset.fila = s.Fila;
             btn.dataset.asiento = s.Asiento;
 
             const isMine = (s.Estado==='Hold' && (s.HoldBy||'')===sid);
+
             if (s.Estado==='Ocupado') {
-              btn.classList.add('ocupado');
-              btn.disabled = true;
+              btn.classList.add('ocupado'); btn.disabled = true;
+            } else if (s.Estado==='Pendiente de confirmación') {
+              btn.classList.add('pendiente'); btn.disabled = true;
             } else if (s.Estado==='Hold') {
               btn.classList.add('seleccionado');
-              if (!isMine) btn.disabled = true; // hold de otro
+              if (!isMine) btn.disabled = true;
             } else {
               btn.classList.add('libre');
             }
@@ -207,7 +197,6 @@
                   const j = await apiHold(secKey, fila, asiento);
                   if (!j.ok) console.warn('hold fail', j);
                 } else if (btn.classList.contains('seleccionado')) {
-                  // liberar solo si es mío
                   const nowObj = current.find(x=>x.Sector===secKey && x.Fila===fila && x.Asiento===asiento);
                   if (nowObj && nowObj.HoldBy===sid) {
                     const j = await apiRelease(secKey, fila, asiento);
@@ -258,7 +247,8 @@
           Precio: Number(x.Precio||0),
           Estado: (x.Estado||'Libre').trim(),
           HoldBy: x.HoldBy || '',
-          HoldUntil: x.HoldUntil || ''
+          HoldUntil: x.HoldUntil || '',
+          Alumno: x['Alumno/a'] || ''
         }));
         if (rebuild) buildOnce(); else updateTotals();
       } catch(e){
@@ -270,17 +260,14 @@
           d.textContent='No pude cargar el estado. Verificá las credenciales y la hoja compartida.';
           document.body.appendChild(d);
         }
-      } finally {
-        building = false;
-      }
+      } finally { building = false; }
     }
 
-    // ===== Modal helpers =====
+    // ---- Modal helpers ----
     const $modalRoot = document.getElementById('modalRoot');
     const $modalTitle = document.getElementById('modalTitle');
     const $modalContent = document.getElementById('modalContent');
     const $modalActions = document.getElementById('modalActions');
-
     function closeModal(){ $modalRoot.style.display='none'; $modalContent.innerHTML=''; $modalActions.innerHTML=''; }
     function openModal({title, html, actions=[]}){
       $modalTitle.textContent = title || '';
@@ -295,11 +282,9 @@
       });
       $modalRoot.style.display='flex';
     }
-    // cerrar con ESC / click fuera
     document.addEventListener('keydown',e=>{ if(e.key==='Escape' && $modalRoot.style.display==='flex') closeModal(); });
     $modalRoot.addEventListener('click',e=>{ if(e.target===$modalRoot) closeModal(); });
 
-    // ===== Flujo: pedir nombre del/la alumno/a =====
     function askStudentName(){
       return new Promise((resolve)=>{
         openModal({
@@ -323,8 +308,6 @@
         setTimeout(()=>document.getElementById('alumnoInput')?.focus(), 30);
       });
     }
-
-    // ===== Resumen de compra (modal grande) =====
     function copyText(text){ navigator.clipboard?.writeText(text).catch(()=>{}); }
 
     function showSummaryModal(nombreAlumno, seleccionadas, total){
@@ -332,6 +315,7 @@
         .map(s => `<li>Sector ${labels[s.Sector]} — F${s.Fila}, A${s.Asiento} — $${Number(s.Precio).toLocaleString('es-AR')}</li>`)
         .join('');
 
+      // render modal
       openModal({
         title: 'Resumen de compra',
         html: `
@@ -349,30 +333,45 @@
                 <button class="btn btn-ghost" style="margin-left:8px" onclick="copyText(document.getElementById('cvuTxt').textContent)">Copiar CVU</button>
               </div>
               <div><strong>Banco:</strong> Proveedor de Servicios de Pago - Garpa S.A.</div>
-              <div class="badge" style="margin-top:10px">Tenés 10 minutos para completar la transferencia</div>
+              <div class="badge" style="margin-top:10px">
+                Tenés 10 minutos para completar la compra enviando comprobante de transferencia vía WhatsApp.
+                De lo contrario los lugares seleccionados quedarán liberados.
+              </div>
             </div>
           </div>
         `,
         actions: [
-          { label:'Cerrar', variant:'ghost', onClick: closeModal }
+          { label:'Cancelar', variant:'ghost', onClick: closeModal },
+          { label:'Confirmar compra', variant:'primary', onClick: async ()=>{
+              // enviar al backend: escribir Alumno/a en I y pasar a "Pendiente de confirmación"
+              try{
+                const res = await apiCheckout(nombreAlumno);
+                if (!res.ok) { console.warn('checkout fail', res); }
+                // refrescamos para que se vean en amarillo
+                await refresh(true);
+                // feedback suave: deshabilitar botón primario
+                const btns = $modalActions.querySelectorAll('button');
+                btns.forEach(b=>b.disabled=true);
+                $modalTitle.textContent = '¡Reserva enviada!';
+              }catch(e){ console.error(e); }
+          }}
         ]
       });
     }
 
-    // ===== Handler del botón Comprar =====
     document.getElementById('comprar').onclick = async () => {
       const mine = current.filter(s => s.Estado==='Hold' && (s.HoldBy||'')===sid);
-      if (mine.length < 5) return; // ya viene deshabilitado
+      if (mine.length < 5) return;
       const total = mine.reduce((a,s)=> a + (Number(s.Precio)||0), 0);
       const nombre = await askStudentName();
-      if (!nombre) return; // canceló
+      if (!nombre) return;
       showSummaryModal(nombre, mine, total);
     };
 
-    // init: primer render + polling
+    // init
     (async ()=>{
-      await refresh(true);                    // construye DOM una vez con datos reales
-      setInterval(()=>refresh(true), 45000);  // polling cada 45s con rebuild
+      await refresh(true);
+      setInterval(()=>refresh(true), 45000);
       document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) refresh(true); });
     })();
   </script>

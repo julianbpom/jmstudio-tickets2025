@@ -56,6 +56,21 @@
     #comprar:hover{background:var(--primary-hov)}
     #comprar[disabled]{opacity:.5;cursor:not-allowed;box-shadow:none}
     #countHint{position:fixed;top:14px;right:160px;background:var(--chip);border:1px solid var(--border);padding:10px 14px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.12);font-weight:600;z-index:20;color:var(--muted)}
+
+    /* --- Modal simple --- */
+    .modal-backdrop{position:fixed;inset:0;background:rgba(14,23,38,.55);backdrop-filter:blur(2px);display:none;align-items:center;justify-content:center;z-index:200}
+    .modal{width:min(720px,92vw);max-height:90vh;background:#fff;border:1px solid var(--border);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;overflow:hidden}
+    .modal header{padding:16px 20px;border-bottom:1px solid var(--border);font-weight:700}
+    .modal .content{padding:18px 20px;overflow:auto}
+    .modal footer{padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end}
+    .btn{border:none;border-radius:12px;padding:10px 14px;cursor:pointer}
+    .btn-primary{background:var(--primary);color:#fff}
+    .btn-primary:hover{background:var(--primary-hov)}
+    .btn-ghost{background:#fff;border:1px solid var(--border)}
+    .input{width:100%;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:15px}
+    .summary-list{margin:0;padding-left:18px}
+    .summary-list li{margin:4px 0}
+    .badge{display:inline-block;background:#f2f4f7;border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:12px;color:var(--muted)}
   </style>
 </head>
 <body>
@@ -72,6 +87,15 @@
     <div class="grid-sectores" id="sectores"></div>
   </div>
   <button id="comprar" disabled title="Seleccioná al menos 5 butacas">Comprar</button>
+
+  <!-- Modal reutilizable -->
+  <div id="modalRoot" class="modal-backdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header id="modalTitle">Título</header>
+      <div class="content" id="modalContent"></div>
+      <footer id="modalActions"></footer>
+    </div>
+  </div>
 
   <script>
     // --- sessionId robusto con fallback
@@ -92,7 +116,6 @@
     const order = ['I','C','D'];
     const labels = { I: 'Izquierda', C: 'Central', D: 'Derecho' };
     let current = [];
-    let building = false;
 
     const priceFmt = n => '$' + (Number(n)||0).toLocaleString('es-AR');
 
@@ -152,7 +175,7 @@
           const seatsDiv = filaDiv.querySelector('.seats');
 
           let lista = (map[sec][f]||[]).slice().sort((a,b)=>a.Asiento-b.Asiento);
-          if(sec==='I') lista = lista.reverse();
+          if(sec==='I') lista = lista.reverse(); // espejado
 
           lista.forEach(s=>{
             const btn = document.createElement('button');
@@ -168,9 +191,8 @@
               btn.classList.add('ocupado');
               btn.disabled = true;
             } else if (s.Estado==='Hold') {
-              btn.classList.add(isMine ? 'seleccionado' : 'seleccionado');
-              // si no es mío, deshabilitar
-              if (!isMine) btn.disabled = true;
+              btn.classList.add('seleccionado');
+              if (!isMine) btn.disabled = true; // hold de otro
             } else {
               btn.classList.add('libre');
             }
@@ -185,7 +207,7 @@
                   const j = await apiHold(secKey, fila, asiento);
                   if (!j.ok) console.warn('hold fail', j);
                 } else if (btn.classList.contains('seleccionado')) {
-                  // solo libero si es mío (según datos actuales)
+                  // liberar solo si es mío
                   const nowObj = current.find(x=>x.Sector===secKey && x.Fila===fila && x.Asiento===asiento);
                   if (nowObj && nowObj.HoldBy===sid) {
                     const j = await apiRelease(secKey, fila, asiento);
@@ -222,6 +244,7 @@
       updateTotals();
     }
 
+    let building = false;
     async function refresh(rebuild=false){
       if (building) return;
       building = true;
@@ -252,25 +275,89 @@
       }
     }
 
-    document.getElementById('comprar').onclick = () => {
-      const mine = current.filter(s => s.Estado==='Hold' && (s.HoldBy||'')===sid);
-      if (mine.length < 5) { alert(`El mínimo de compra es de 5 butacas. Actualmente seleccionaste ${mine.length}.`); return; }
-      const total = mine.reduce((a,s)=> a + (Number(s.Precio)||0), 0);
-      const detalle = mine.map(s => `• Sector ${labels[s.Sector]} (F${s.Fila}, A${s.Asiento}) — $${Number(s.Precio).toLocaleString('es-AR')}`).join('\n');
-      alert(
-        '🛒 Resumen de compra\n\n' + detalle +
-        '\n\nTotal: $' + total.toLocaleString('es-AR') +
-        '\n\nTransferencia:\nJAZMIN MAMARIAN\nCVU: 0000069701259241616580\nBanco: Proveedor de Servicios de Pago - Garpa S.A.' +
-        '\n\nIMPORTANTE: Tenés 10 minutos para completar la transferencia.'
-      );
-    };
+    // ===== Modal helpers =====
+    const $modalRoot = document.getElementById('modalRoot');
+    const $modalTitle = document.getElementById('modalTitle');
+    const $modalContent = document.getElementById('modalContent');
+    const $modalActions = document.getElementById('modalActions');
 
-    // init: primer render + polling
-    (async ()=>{
-      await refresh(true);           // construye DOM una vez con datos reales
-      setInterval(()=>refresh(true), 45000); // polling con rebuild (mantiene handlers frescos)
-      document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) refresh(true); });
-    })();
-  </script>
-</body>
-</html>
+    function closeModal(){ $modalRoot.style.display='none'; $modalContent.innerHTML=''; $modalActions.innerHTML=''; }
+    function openModal({title, html, actions=[]}){
+      $modalTitle.textContent = title || '';
+      $modalContent.innerHTML = html || '';
+      $modalActions.innerHTML = '';
+      actions.forEach(a=>{
+        const b = document.createElement('button');
+        b.className = 'btn ' + (a.variant==='primary'?'btn-primary':'btn-ghost');
+        b.textContent = a.label;
+        b.onclick = a.onClick || closeModal;
+        $modalActions.appendChild(b);
+      });
+      $modalRoot.style.display='flex';
+    }
+    // cerrar con ESC / click fuera
+    document.addEventListener('keydown',e=>{ if(e.key==='Escape' && $modalRoot.style.display==='flex') closeModal(); });
+    $modalRoot.addEventListener('click',e=>{ if(e.target===$modalRoot) closeModal(); });
+
+    // ===== Flujo: pedir nombre del/la alumno/a =====
+    function askStudentName(){
+      return new Promise((resolve)=>{
+        openModal({
+          title: 'Datos del/la alumno/a',
+          html: `
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <label for="alumnoInput" style="font-weight:600">Nombre y Apellido</label>
+              <input id="alumnoInput" class="input" placeholder="Ej: Valentina García" autocomplete="name" />
+              <span class="badge">Usaremos esto sólo en el comprobante de compra</span>
+            </div>
+          `,
+          actions: [
+            { label:'Cancelar', variant:'ghost', onClick: ()=>{ closeModal(); resolve(null); } },
+            { label:'Continuar', variant:'primary', onClick: ()=>{
+                const v = (document.getElementById('alumnoInput').value || '').trim();
+                if(!v){ document.getElementById('alumnoInput').focus(); return; }
+                closeModal(); resolve(v);
+            } }
+          ]
+        });
+        setTimeout(()=>document.getElementById('alumnoInput')?.focus(), 30);
+      });
+    }
+
+    // ===== Resumen de compra (modal grande) =====
+    function copyText(text){ navigator.clipboard?.writeText(text).catch(()=>{}); }
+
+    function showSummaryModal(nombreAlumno, seleccionadas, total){
+      const detalle = seleccionadas
+        .map(s => `<li>Sector ${labels[s.Sector]} — F${s.Fila}, A${s.Asiento} — $${Number(s.Precio).toLocaleString('es-AR')}</li>`)
+        .join('');
+
+      openModal({
+        title: 'Resumen de compra',
+        html: `
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <div><strong>Alumno/a:</strong> ${nombreAlumno}</div>
+            <div><strong>Butacas (${seleccionadas.length}):</strong>
+              <ul class="summary-list">${detalle}</ul>
+            </div>
+            <div><strong>Total:</strong> $${Number(total).toLocaleString('es-AR')}</div>
+            <hr style="border:none;border-top:1px solid var(--border)">
+            <div>
+              <div style="font-weight:700;margin-bottom:6px">Datos para transferencia</div>
+              <div><strong>Titular:</strong> JAZMIN MAMARIAN</div>
+              <div><strong>CVU:</strong> <code id="cvuTxt">0000069701259241616580</code>
+                <button class="btn btn-ghost" style="margin-left:8px" onclick="copyText(document.getElementById('cvuTxt').textContent)">Copiar CVU</button>
+              </div>
+              <div><strong>Banco:</strong> Proveedor de Servicios de Pago - Garpa S.A.</div>
+              <div class="badge" style="margin-top:10px">Tenés 10 minutos para completar la transferencia</div>
+            </div>
+          </div>
+        `,
+        actions: [
+          { label:'Cerrar', variant:'ghost', onClick: closeModal }
+        ]
+      });
+    }
+
+    // ===== Handler del botón Comprar =====
+    document.getElementById('comprar').onclick =

@@ -10,16 +10,16 @@ const {
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST,OPTIONS',
+  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Content-Type': 'application/json',
 };
 
-// Helpers
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function getAuth() {
   if (!GOOGLE_SERVICE_ACCOUNT_EMAIL || !GOOGLE_SERVICE_ACCOUNT_KEY) {
     throw new Error('Missing service account env vars');
   }
-  // La key viene con \n escapados: hay que restaurarlos
   const key = GOOGLE_SERVICE_ACCOUNT_KEY.replace(/\\n/g, '\n');
   return new google.auth.JWT(
     GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -37,31 +37,29 @@ async function getSheetValues(sheets) {
   const rows = data.values || [];
   const headers = rows.shift() || [];
   const objs = rows.map((r, i) => {
-    const rowObj = {};
-    headers.forEach((h, idx) => (rowObj[h] = r[idx]));
-    // guard conversions
-    rowObj._rowIndex = i + 2; // +2 por el header (1) y base 1
-    rowObj.Fila = Number(rowObj.Fila);
-    rowObj.Asiento = Number(rowObj.Asiento);
-    rowObj.Precio = Number(rowObj.Precio || 0);
-    return rowObj;
+    const o = {};
+    headers.forEach((h, idx) => (o[h] = r[idx]));
+    o._rowIndex = i + 2; // header = fila 1
+    o.Fila = Number(o.Fila);
+    o.Asiento = Number(o.Asiento);
+    o.Precio = Number(o.Precio || 0);
+    return o;
   });
   return { headers, objs };
 }
 
-async function writeRow(sheets, headers, seatObj) {
-  // Escribimos la fila completa A:H para mantener Precio y demás
+async function writeRow(sheets, seat) {
+  const range = `${SHEET_NAME}!A${seat._rowIndex}:H${seat._rowIndex}`;
   const row = [
-    seatObj.Sector,
-    seatObj.Fila,
-    seatObj.Asiento,
-    seatObj.Precio,
-    seatObj.Estado || '',
-    seatObj.HoldUntil || '',
-    seatObj.HoldBy || '',
-    seatObj.LastUpdate || '',
+    seat.Sector,
+    seat.Fila,
+    seat.Asiento,
+    seat.Precio,
+    seat.Estado || '',
+    seat.HoldUntil || '',
+    seat.HoldBy || '',
+    seat.LastUpdate || '',
   ];
-  const range = `${SHEET_NAME}!A${seatObj._rowIndex}:H${seatObj._rowIndex}`;
   await sheets.spreadsheets.values.update({
     spreadsheetId: GOOGLE_SHEET_ID,
     range,
@@ -70,104 +68,79 @@ async function writeRow(sheets, headers, seatObj) {
   });
 }
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function addMinutes(iso, mins) {
+const nowIso = () => new Date().toISOString();
+const plusMins = (iso, m) => {
   const d = iso ? new Date(iso) : new Date();
-  d.setMinutes(d.getMinutes() + mins);
+  d.setMinutes(d.getMinutes() + m);
   return d.toISOString();
-}
+};
 
-export async function handler(event) {
+// ── Handler ───────────────────────────────────────────────────────────────────
+export const handler = async (event) => {
   try {
-    // CORS / preflight
+    // OPTIONS: preflight
     if (event.httpMethod === 'OPTIONS') {
       return { statusCode: 204, headers: CORS };
     }
+
+    // GET: ping de diagnóstico (para confirmar que la función se invoca)
+    if (event.httpMethod === 'GET') {
+      return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: true, method: 'GET', hint: 'hold alive' }) };
+    }
+
+    // Aceptamos sólo POST para hold real
     if (event.httpMethod !== 'POST') {
-      return { statusCode: 405, headers: CORS, body: 'Method Not Allowed' };
+      return { statusCode: 405, headers: CORS, body: JSON.stringify({ ok: false, error: 'Method Not Allowed' }) };
     }
 
-    const body = JSON.parse(event.body || '{}');
-    const sector = (body.sector || body.Sector || '').toString().trim();
-    const fila = Number(body.fila ?? body.Fila);
-    const asiento = Number(body.asiento ?? body.Asiento);
-    const sessionId = (body.sessionId || '').toString().trim();
+    if (!GOOGLE_SHEET_ID) throw new Error('Missing GOOGLE_SHEET_ID');
 
-    if (!sector || !fila || !asiento || !sessionId) {
-      return {
-        statusCode: 400,
-        headers: CORS,
-        body: JSON.stringify({ ok: false, error: 'Missing params' }),
-      };
-    }
+    const { sector, Sector, fila, Fila, asiento, Asiento, sessionId } = JSON.parse(event.body || '{}');
+    const sec = (sector || Sector || '').toString().trim();
+    const fi  = Number(fila ?? Fila);
+    const ai  = Number(asiento ?? Asiento);
+    const sid = (sessionId || '').toString().trim();
 
-    if (!GOOGLE_SHEET_ID) {
-      throw new Error('Missing GOOGLE_SHEET_ID');
+    if (!sec || !fi || !ai || !sid) {
+      return { statusCode: 400, headers: CORS, body: JSON.stringify({ ok:false, error:'Missing params' }) };
     }
 
     const auth = getAuth();
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // 1) Leer toda la hoja
-    const { headers, objs } = await getSheetValues(sheets);
+    // 1) leer
+    const { objs } = await getSheetValues(sheets);
 
-    // 2) Limpiar holds vencidos al vuelo
+    // 2) limpiar holds vencidos
     const now = nowIso();
-    const expired = [];
     for (const s of objs) {
       if (s.Estado === 'Hold' && s.HoldUntil && new Date(s.HoldUntil) < new Date(now)) {
-        s.Estado = 'Libre';
-        s.HoldBy = '';
-        s.HoldUntil = '';
-        s.LastUpdate = now;
-        expired.push(s);
+        s.Estado = 'Libre'; s.HoldBy = ''; s.HoldUntil = ''; s.LastUpdate = now;
+        await writeRow(sheets, s);
       }
     }
-    // Persistir expirados (si hay)
-    for (const s of expired) {
-      await writeRow(sheets, headers, s);
-    }
 
-    // 3) Buscar la butaca
-    const seat = objs.find(
-      (x) => x.Sector === sector && x.Fila === fila && x.Asiento === asiento
-    );
-    if (!seat) {
-      return { statusCode: 404, headers: CORS, body: JSON.stringify({ ok: false, error: 'Seat not found' }) };
-    }
+    // 3) buscar asiento
+    const seat = objs.find(x => x.Sector === sec && x.Fila === fi && x.Asiento === ai);
+    if (!seat) return { statusCode: 404, headers: CORS, body: JSON.stringify({ ok:false, error:'Seat not found' }) };
 
-    // 4) Reglas de hold
     if (seat.Estado === 'Ocupado') {
-      return { statusCode: 409, headers: CORS, body: JSON.stringify({ ok: false, error: 'Seat occupied' }) };
+      return { statusCode: 409, headers: CORS, body: JSON.stringify({ ok:false, error:'Seat occupied' }) };
+    }
+    if (seat.Estado === 'Hold' && seat.HoldBy && seat.HoldBy !== sid) {
+      return { statusCode: 409, headers: CORS, body: JSON.stringify({ ok:false, error:'Seat on hold by another session' }) };
     }
 
-    if (seat.Estado === 'Hold' && seat.HoldBy && seat.HoldBy !== sessionId) {
-      // hold de otra persona y NO vencido (ya limpiamos vencidos)
-      return { statusCode: 409, headers: CORS, body: JSON.stringify({ ok: false, error: 'Seat on hold by another session' }) };
-    }
-
-    // 5) Aplicar hold (10 minutos)
+    // 4) aplicar hold (10 min)
     seat.Estado = 'Hold';
-    seat.HoldBy = sessionId;
-    seat.HoldUntil = addMinutes(now, 10);
+    seat.HoldBy = sid;
+    seat.HoldUntil = plusMins(now, 10);
     seat.LastUpdate = now;
+    await writeRow(sheets, seat);
 
-    await writeRow(sheets, headers, seat);
-
-    return {
-      statusCode: 200,
-      headers: CORS,
-      body: JSON.stringify({ ok: true, until: seat.HoldUntil }),
-    };
+    return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok:true, until: seat.HoldUntil }) };
   } catch (err) {
     console.error('HOLD ERROR', err);
-    return {
-      statusCode: 500,
-      headers: CORS,
-      body: JSON.stringify({ ok: false, error: String(err && err.message || err) }),
-    };
+    return { statusCode: 500, headers: CORS, body: JSON.stringify({ ok:false, error: String(err?.message || err) }) };
   }
-}
+};

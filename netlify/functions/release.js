@@ -1,47 +1,136 @@
-import { sheetsClient, SHEET_ID, SHEET_NAME, rowToObj, objToRow } from './_shared.mjs';
+// netlify/functions/release.js
+import { google } from 'googleapis';
 
-export default async function handler(event) {
-  if (event.httpMethod !== 'POST') return new Response('Method Not Allowed', { status: 405 });
+const {
+  GOOGLE_SERVICE_ACCOUNT_EMAIL,
+  GOOGLE_SERVICE_ACCOUNT_KEY,
+  GOOGLE_SHEET_ID,
+  SHEET_NAME = 'Entradas',
+} = process.env;
+
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+};
+
+// Helpers
+function getAuth() {
+  if (!GOOGLE_SERVICE_ACCOUNT_EMAIL || !GOOGLE_SERVICE_ACCOUNT_KEY) {
+    throw new Error('Missing service account env vars');
+  }
+  const key = GOOGLE_SERVICE_ACCOUNT_KEY.replace(/\\n/g, '\n');
+  return new google.auth.JWT(
+    GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    undefined,
+    key,
+    ['https://www.googleapis.com/auth/spreadsheets']
+  );
+}
+
+async function getSheetValues(sheets) {
+  const { data } = await sheets.spreadsheets.values.get({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: `${SHEET_NAME}!A:H`,
+  });
+  const rows = data.values || [];
+  const headers = rows.shift() || [];
+  const objs = rows.map((r, i) => {
+    const rowObj = {};
+    headers.forEach((h, idx) => (rowObj[h] = r[idx]));
+    rowObj._rowIndex = i + 2; // fila real en la hoja
+    rowObj.Fila = Number(rowObj.Fila);
+    rowObj.Asiento = Number(rowObj.Asiento);
+    rowObj.Precio = Number(rowObj.Precio || 0);
+    return rowObj;
+  });
+  return { headers, objs };
+}
+
+async function writeRow(sheets, seatObj) {
+  const range = `${SHEET_NAME}!A${seatObj._rowIndex}:H${seatObj._rowIndex}`;
+  const row = [
+    seatObj.Sector,
+    seatObj.Fila,
+    seatObj.Asiento,
+    seatObj.Precio,
+    seatObj.Estado || '',
+    seatObj.HoldUntil || '',
+    seatObj.HoldBy || '',
+    seatObj.LastUpdate || '',
+  ];
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range,
+    valueInputOption: 'RAW',
+    requestBody: { values: [row] },
+  });
+}
+
+function nowIso() { return new Date().toISOString(); }
+
+export async function handler(event) {
   try {
-    const { sector, fila, asiento, sessionId } = JSON.parse(event.body || '{}');
+    // CORS / preflight
+    if (event.httpMethod === 'OPTIONS') {
+      return { statusCode: 204, headers: CORS };
+    }
+    if (event.httpMethod !== 'POST') {
+      return { statusCode: 405, headers: CORS, body: 'Method Not Allowed' };
+    }
+
+    const body = JSON.parse(event.body || '{}');
+    const sector = (body.sector || body.Sector || '').toString().trim();
+    const fila = Number(body.fila ?? body.Fila);
+    const asiento = Number(body.asiento ?? body.Asiento);
+    const sessionId = (body.sessionId || '').toString().trim();
+
     if (!sector || !fila || !asiento || !sessionId) {
-      return new Response(JSON.stringify({ ok:false, reason:'missing_params' }), { status: 400 });
+      return {
+        statusCode: 400,
+        headers: CORS,
+        body: JSON.stringify({ ok: false, error: 'Missing params' }),
+      };
     }
-    const sheets = sheetsClient();
-    const now = new Date();
+    if (!GOOGLE_SHEET_ID) throw new Error('Missing GOOGLE_SHEET_ID');
 
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: `${SHEET_NAME}!A2:H`,
-    });
-    const rows = res.data.values || [];
-    const idx = rows.findIndex(r =>
-      r[0] === sector && Number(r[1]) === Number(fila) && Number(r[2]) === Number(asiento)
+    const auth = getAuth();
+    const sheets = google.sheets({ version: 'v4', auth });
+
+    const { objs } = await getSheetValues(sheets);
+
+    const seat = objs.find(
+      (x) => x.Sector === sector && x.Fila === fila && x.Asiento === asiento
     );
-    if (idx === -1) return new Response(JSON.stringify({ ok:false, reason:'not_found' }), { status: 404 });
-
-    const r = rows[idx];
-    let obj = rowToObj(r);
-
-    if (obj.Estado !== 'Hold' || (obj.HoldBy && obj.HoldBy !== sessionId)) {
-      return new Response(JSON.stringify({ ok:false, reason:'not_your_hold' }), { status: 200 });
+    if (!seat) {
+      return { statusCode: 404, headers: CORS, body: JSON.stringify({ ok: false, error: 'Seat not found' }) };
     }
 
-    obj.Estado = 'Libre';
-    obj.HoldUntil = '';
-    obj.HoldBy = '';
-    obj.LastUpdate = now.toISOString();
+    // Sólo puede liberar quien tiene el hold
+    if (seat.Estado === 'Hold' && seat.HoldBy && seat.HoldBy !== sessionId) {
+      return { statusCode: 409, headers: CORS, body: JSON.stringify({ ok: false, error: 'Seat held by another session' }) };
+    }
 
-    const writeRow = idx + 2;
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `${SHEET_NAME}!A${writeRow}:H${writeRow}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [objToRow(obj)] }
-    });
+    // Si ya está libre, devolvemos ok idempotente
+    if (seat.Estado === 'Libre' || !seat.Estado) {
+      return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: true }) };
+    }
 
-    return new Response(JSON.stringify({ ok:true }), { status: 200 });
-  } catch (e) {
-    return new Response(JSON.stringify({ ok:false, error: e.message }), { status: 500 });
+    // Liberar
+    seat.Estado = 'Libre';
+    seat.HoldBy = '';
+    seat.HoldUntil = '';
+    seat.LastUpdate = nowIso();
+
+    await writeRow(sheets, seat);
+
+    return { statusCode: 200, headers: CORS, body: JSON.stringify({ ok: true }) };
+  } catch (err) {
+    console.error('RELEASE ERROR', err);
+    return {
+      statusCode: 500,
+      headers: CORS,
+      body: JSON.stringify({ ok: false, error: String(err && err.message || err) }),
+    };
   }
 }

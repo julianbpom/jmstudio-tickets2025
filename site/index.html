@@ -360,4 +360,21 @@
     }
 
     // ===== Handler del botón Comprar =====
-    document.getElementById('comprar').onclick =
+    document.getElementById('comprar').onclick = async () => {
+      const mine = current.filter(s => s.Estado==='Hold' && (s.HoldBy||'')===sid);
+      if (mine.length < 5) return; // ya viene deshabilitado
+      const total = mine.reduce((a,s)=> a + (Number(s.Precio)||0), 0);
+      const nombre = await askStudentName();
+      if (!nombre) return; // canceló
+      showSummaryModal(nombre, mine, total);
+    };
+
+    // init: primer render + polling
+    (async ()=>{
+      await refresh(true);                    // construye DOM una vez con datos reales
+      setInterval(()=>refresh(true), 45000);  // polling cada 45s con rebuild
+      document.addEventListener('visibilitychange', ()=>{ if (!document.hidden) refresh(true); });
+    })();
+  </script>
+</body>
+</html>

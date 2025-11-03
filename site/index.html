@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Ticketera — Preventa OCTUBRE 2025</title>
+  <title>Ticketera — Preventa NOVIEMBRE 2025</title>
   <style>
     :root{
       --bg:#eef3f7; --ink:#0e1726; --border:rgba(0,0,0,.08);
@@ -76,7 +76,7 @@
   </style>
 </head>
 <body>
-  <header><h1>Mapa de Butacas — Preventa OCTUBRE 2025</h1></header>
+  <header><h1>Mapa de Butacas — Preventa NOVIEMBRE 2025</h1></header>
   <div id="countHint">0/5 seleccionadas</div>
   <div id="total">Total: $0</div>
   <div class="wrap">
@@ -101,6 +101,8 @@
   </div>
 
   <script>
+    // (El resto del JS es igual a tu versión actual; sólo cambiamos rótulos y precios)
+
     // ---- sessionId ----
     const sid = (() => {
       try {
@@ -142,11 +144,7 @@
       const root = document.getElementById('sectores');
       root.innerHTML = '';
       const map = {};
-      current.forEach(s=>{
-        if(!map[s.Sector]) map[s.Sector]={};
-        if(!map[s.Sector][s.Fila]) map[s.Sector][s.Fila]=[];
-        map[s.Sector][s.Fila].push(s);
-      });
+      current.forEach(s=>{ if(!map[s.Sector]) map[s.Sector]={}; if(!map[s.Sector][s.Fila]) map[s.Sector][s.Fila]=[]; map[s.Sector][s.Fila].push(s); });
 
       order.forEach(sec=>{
         const card = document.createElement('div');
@@ -181,8 +179,7 @@
             } else if (s.Estado==='Pendiente de confirmación') {
               btn.classList.add('pendiente'); btn.disabled = true;
             } else if (s.Estado==='Hold') {
-              btn.classList.add('seleccionado');
-              if (!isMine) btn.disabled = true;
+              btn.classList.add('seleccionado'); if (!isMine) btn.disabled = true;
             } else {
               btn.classList.add('libre');
             }
@@ -194,14 +191,10 @@
               const asiento = Number(btn.dataset.asiento);
               try{
                 if (btn.classList.contains('libre')) {
-                  const j = await apiHold(secKey, fila, asiento);
-                  if (!j.ok) console.warn('hold fail', j);
+                  const j = await apiHold(secKey, fila, asiento); if (!j.ok) console.warn('hold fail', j);
                 } else if (btn.classList.contains('seleccionado')) {
                   const nowObj = current.find(x=>x.Sector===secKey && x.Fila===fila && x.Asiento===asiento);
-                  if (nowObj && nowObj.HoldBy===sid) {
-                    const j = await apiRelease(secKey, fila, asiento);
-                    if (!j.ok) console.warn('release fail', j);
-                  }
+                  if (nowObj && nowObj.HoldBy===sid) { const j = await apiRelease(secKey, fila, asiento); if (!j.ok) console.warn('release fail', j); }
                 }
               } catch(e){ console.error(e); }
               finally { await refresh(true); }
@@ -216,15 +209,15 @@
         root.appendChild(card);
       });
 
-      // panel precios
+      // panel precios (ACTUALIZADO a NOVIEMBRE)
       const pricing = document.createElement('div');
       pricing.className = 'pricing card';
       pricing.innerHTML = `
-        <h3>Precios Preventa OCTUBRE (ARS)</h3>
+        <h3>Precios Preventa NOVIEMBRE (ARS)</h3>
         <div class="row">
-          <span class="chip">Filas 1 a 6: <strong>$25.000</strong></span>
-          <span class="chip">Filas 7 a 12: <strong>$20.000</strong></span>
-          <span class="chip">Filas 13 a 18: <strong>$18.000</strong></span>
+          <span class="chip">Filas 1 a 6: <strong>$26.500</strong></span>
+          <span class="chip">Filas 7 a 12: <strong>$21.500</strong></span>
+          <span class="chip">Filas 13 a 18: <strong>$19.500</strong></span>
         </div>
         <div class="min-note">Mínimo de compra: <strong>5</strong> butacas</div>
       `;
@@ -235,8 +228,7 @@
 
     let building = false;
     async function refresh(rebuild=false){
-      if (building) return;
-      building = true;
+      if (building) return; building = true;
       try{
         const data = await fetchStatus();
         if (!Array.isArray(data)) throw new Error('status no es array');
@@ -263,7 +255,7 @@
       } finally { building = false; }
     }
 
-    // ---- Modal helpers ----
+    // ---- Modal helpers (sin cambios) ----
     const $modalRoot = document.getElementById('modalRoot');
     const $modalTitle = document.getElementById('modalTitle');
     const $modalContent = document.getElementById('modalContent');
@@ -315,7 +307,6 @@
         .map(s => `<li>Sector ${labels[s.Sector]} — F${s.Fila}, A${s.Asiento} — $${Number(s.Precio).toLocaleString('es-AR')}</li>`)
         .join('');
 
-      // render modal
       openModal({
         title: 'Resumen de compra',
         html: `
@@ -343,15 +334,11 @@
         actions: [
           { label:'Cancelar', variant:'ghost', onClick: closeModal },
           { label:'Confirmar compra', variant:'primary', onClick: async ()=>{
-              // enviar al backend: escribir Alumno/a en I y pasar a "Pendiente de confirmación"
               try{
                 const res = await apiCheckout(nombreAlumno);
                 if (!res.ok) { console.warn('checkout fail', res); }
-                // refrescamos para que se vean en amarillo
                 await refresh(true);
-                // feedback suave: deshabilitar botón primario
-                const btns = $modalActions.querySelectorAll('button');
-                btns.forEach(b=>b.disabled=true);
+                const btns = $modalActions.querySelectorAll('button'); btns.forEach(b=>b.disabled=true);
                 $modalTitle.textContent = '¡Reserva enviada!';
               }catch(e){ console.error(e); }
           }}
@@ -368,7 +355,6 @@
       showSummaryModal(nombre, mine, total);
     };
 
-    // init
     (async ()=>{
       await refresh(true);
       setInterval(()=>refresh(true), 45000);

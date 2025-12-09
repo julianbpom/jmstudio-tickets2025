@@ -52,7 +52,6 @@
     .pricing h3{margin:0 0 8px 0;font-size:16px;text-align:center;color:var(--ink)}
     .pricing .row{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
     .chip{background:#fff;border:1px solid var(--border);border-radius:999px;padding:8px 12px;font-size:13px}
-    .min-note{text-align:center;font-weight:600;margin-top:10px;color:var(--primary)}
     #total{position:fixed;top:14px;right:16px;background:var(--chip);border:1px solid var(--border);padding:10px 14px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.12);font-weight:700;z-index:20}
     #comprar{position:fixed;bottom:18px;right:18px;padding:12px 18px;border:none;border-radius:12px;background:var(--primary);color:#fff;font-size:15px;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.18);z-index:20}
     #comprar:hover{background:var(--primary-hov)}
@@ -77,7 +76,7 @@
 </head>
 <body>
   <header><h1>Mapa de Butacas — Venta General</h1></header>
-  <div id="countHint">0/5 seleccionadas</div>
+  <div id="countHint">0 seleccionadas</div>
   <div id="total">Total: $0</div>
   <div class="wrap">
     <div class="escenario">ESCENARIO 🎭</div>
@@ -89,7 +88,7 @@
     </div>
     <div class="grid-sectores" id="sectores"></div>
   </div>
-  <button id="comprar" disabled title="Seleccioná al menos 5 butacas">Comprar</button>
+  <button id="comprar" disabled title="Seleccioná al menos 1 butaca">Comprar</button>
 
   <!-- Modal -->
   <div id="modalRoot" class="modal-backdrop" aria-hidden="true">
@@ -101,9 +100,6 @@
   </div>
 
   <script>
-    // (El resto del JS es igual a tu versión actual; sólo cambiamos rótulos y precios)
-
-    // ---- sessionId ----
     const sid = (() => {
       try {
         const k='sessionId';
@@ -118,26 +114,20 @@
     let current = [];
     const priceFmt = n => '$' + (Number(n)||0).toLocaleString('es-AR');
 
-    // ---- API ----
+    // API
     async function fetchStatus(){ const r=await fetch('/.netlify/functions/status',{cache:'no-store'}); if(!r.ok) throw new Error('status '+r.status); return r.json(); }
-    async function apiHold(sec,fila,asiento){
-      const r=await fetch('/.netlify/functions/hold',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sector:sec,fila,asiento,sessionId:sid})}); return r.json();
-    }
-    async function apiRelease(sec,fila,asiento){
-      const r=await fetch('/.netlify/functions/release',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sector:sec,fila,asiento,sessionId:sid})}); return r.json();
-    }
-    async function apiCheckout(alumno){
-      const r=await fetch('/.netlify/functions/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:sid,alumno})}); return r.json();
-    }
+    async function apiHold(sec,fila,asiento){ const r=await fetch('/.netlify/functions/hold',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sector:sec,fila,asiento,sessionId:sid})}); return r.json(); }
+    async function apiRelease(sec,fila,asiento){ const r=await fetch('/.netlify/functions/release',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sector:sec,fila,asiento,sessionId:sid})}); return r.json(); }
+    async function apiCheckout(alumno){ const r=await fetch('/.netlify/functions/checkout',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:sid,alumno})}); return r.json(); }
 
     function updateTotals(){
       const mine = current.filter(s => s.Estado==='Hold' && (s.HoldBy||'')===sid);
       const total = mine.reduce((a,s)=> a + (Number(s.Precio)||0), 0);
       document.getElementById('total').textContent = 'Total: ' + priceFmt(total);
-      document.getElementById('countHint').textContent = `${mine.length}/5 seleccionadas`;
+      document.getElementById('countHint').textContent = `${mine.length} seleccionadas`;
       const buyBtn = document.getElementById('comprar');
-      buyBtn.disabled = mine.length < 5;
-      buyBtn.title = buyBtn.disabled ? 'Seleccioná al menos 5 butacas' : 'Continuar con la compra';
+      buyBtn.disabled = mine.length < 1;
+      buyBtn.title = buyBtn.disabled ? 'Seleccioná al menos 1 butaca' : 'Continuar con la compra';
     }
 
     function buildOnce(){
@@ -209,7 +199,7 @@
         root.appendChild(card);
       });
 
-      // panel precios (ACTUALIZADO a NOVIEMBRE)
+      // panel precios (sin mínimo)
       const pricing = document.createElement('div');
       pricing.className = 'pricing card';
       pricing.innerHTML = `
@@ -219,7 +209,6 @@
           <span class="chip">Filas 7 a 12: <strong>$21.500</strong></span>
           <span class="chip">Filas 13 a 18: <strong>$19.500</strong></span>
         </div>
-        <div class="min-note">Mínimo de compra: <strong>5</strong> butacas</div>
       `;
       root.appendChild(pricing);
 
@@ -255,7 +244,7 @@
       } finally { building = false; }
     }
 
-    // ---- Modal helpers (sin cambios) ----
+    // Modal helpers + flujo de compra
     const $modalRoot = document.getElementById('modalRoot');
     const $modalTitle = document.getElementById('modalTitle');
     const $modalContent = document.getElementById('modalContent');
@@ -303,10 +292,10 @@
     function copyText(text){ navigator.clipboard?.writeText(text).catch(()=>{}); }
 
     function showSummaryModal(nombreAlumno, seleccionadas, total){
+      const labels = { I: 'Izquierda', C: 'Central', D: 'Derecho' };
       const detalle = seleccionadas
         .map(s => `<li>Sector ${labels[s.Sector]} — F${s.Fila}, A${s.Asiento} — $${Number(s.Precio).toLocaleString('es-AR')}</li>`)
         .join('');
-
       openModal({
         title: 'Resumen de compra',
         html: `
@@ -348,7 +337,7 @@
 
     document.getElementById('comprar').onclick = async () => {
       const mine = current.filter(s => s.Estado==='Hold' && (s.HoldBy||'')===sid);
-      if (mine.length < 5) return;
+      if (mine.length < 1) return;
       const total = mine.reduce((a,s)=> a + (Number(s.Precio)||0), 0);
       const nombre = await askStudentName();
       if (!nombre) return;
